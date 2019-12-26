@@ -1,0 +1,585 @@
+---
+title: "Identification of Liver Patients"
+author: "Dushyanta Mishra"
+date: "12/24/2019"
+output: 
+  pdf_document:
+    toc: true
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(caret)
+```
+
+# Introduction
+
+Patients in hospitals often exhibit complex medical expositions, making it difficult for doctors to determine whether any undiagnosed underlying conditions may be impacting their current condition.
+
+For example, when a patient shows symptoms like aches, 
+dizziness or tiredness, they may be examined and diagnosed for an underlying heart conditon. While this is likely to be the most probable and significant conditon they have, it is possible that they might have another condition which is aggravating their symptoms.
+
+In recent years, there has been an increase in patients being diagnosed with chronic liver disease, which requires the expertise of a hepatologist. 
+
+For this reason, this project attempts to develop a machine learning technique that identifies those patients who are similar to patients who receive care from a hepatologist. The dataset used is available at UCI Machine Learning Repository,
+http://archive.ics.uci.edu/ml.
+
+
+
+The aimed result of the project is an algorithm that could be run 
+in the background against blood test results to indicate whether patients who are not currently under hapatic care would benefit from further examination and potentially a referral for continuing care.
+
+
+# Data Exploration
+
+## Downloading and Splitting the Data
+
+The data is downloaded through the following code, the comments after the column names are from the original dataset's information page. 
+
+```{r import-file}
+columnNames <- c('age', # Age of the patient 
+                 'sex', # Sex of the patient 
+                 'tb', # Total Bilirubin
+                 'db', # Direct Bilirubin 
+                 'alkphos', # Alkaline Phosphotase
+                 'sgpt', # Alamine Aminotransferase
+                 'sgot', # Aspartate Aminotransferase
+                 'tp', # Total Protiens
+                 'alb', # Albumin
+                 'ag', # Ratio	Albumin and Globulin Ratio 
+                 'outcome') # Selector field used to split the data into two sets
+fullData <- read.table("https://archive.ics.uci.edu/ml/machine-learning-databases/00225/Indian%20Liver%20Patient%20Dataset%20(ILPD).csv",
+                       sep=',',
+                       header=FALSE,
+                       col.names=columnNames)
+fullData <- subset(fullData, complete.cases(fullData))
+fullData <- fullData %>% 
+  mutate(outcome = as.character(outcome)) %>% 
+  mutate(outcome = replace(outcome, outcome == '1', 'Care')) %>%
+  mutate(outcome = replace(outcome, outcome == '2', 'Control')) %>%
+  mutate(outcome = as.factor(outcome))
+rm(columnNames)
+head(fullData)
+```
+
+Next, the data is split into training and test sets, noting the approximate proportions in the outcome column.
+
+```{r test-train}
+set.seed(1)
+trainIndex <- createDataPartition(fullData$outcome, p=.7, list=FALSE)
+train <- fullData[trainIndex,]
+test <- fullData[-trainIndex,]
+rm(trainIndex)
+```
+
+## Column-by-column exploration
+
+### Age
+
+```{r age-exploration}
+train %>% 
+  ggplot(aes(x = age)) + 
+    geom_histogram(binwidth = 20) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+With a broad overview, both groups of patients
+appear to have similar shaped age distributions.
+
+### Sex
+
+```{r sex-exploration}
+train %>% 
+  ggplot(aes(x = sex)) + 
+    geom_bar() + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+It appears that women appear less frequently than men in both groups (group with liver disease and the control group). The control group looks as though it may have been constructed to mimic the patients with liver disease.
+
+### Bilirubin
+
+Bilirubin is a compound that naturally occurs in the blood from the breakdown
+of heme.
+
+Two values are included in the data;
+
+* *Total bilirubin* which includes both conjugated and unconjugated bilirubin 
+  present in the sample.
+* *Direct bilirubin* which refers to the water-soluble bilirubin present in 
+  the blood sample which is available to react with the reagents. Most of this
+  will be conjugated bilirubin, but some may not be. 
+  
+```{r total-bilirubin-exploration}
+train %>% 
+  ggplot(aes(x = tb)) + 
+    geom_histogram(binwidth = 5) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+The histogram shows the total bilirubin levels of the two groups. 
+
+The striking point that can be seen immediately is the wider range of the
+patients with liver disease compared to the control group. 
+
+That said, it's clear that in isolation, this is not an indicator, as the 
+most common values (the 0-5 column) is present in both groups.
+
+```{r direct-bilirubin-exploration}
+train %>% 
+  ggplot(aes(x = db)) + 
+    geom_histogram(binwidth = 1) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+The same can be seen in this histogram of the direct bilirubin values.
+
+### Enzymes
+
+The next three columns refer to specific enzymes or groups of enzymes that 
+may be present in the blood sample.
+
+* *Alkaline Phosphotase* - which removes phosphate groups from organic
+  compounds.
+* *Alanine Aminotransferase* - affects the transfer of amino groups from 
+  L-alanine to ??-ketoglutarate
+* *Aspartate Aminotransferase* - affects the transfer of amino groups from 
+  aspartic acid to alpha-ketoglutaric acid
+
+```{r alkphos-exploration}
+train %>% 
+  ggplot(aes(x = alkphos)) + 
+    geom_histogram(binwidth = 200) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+```{r sgpt-exploration}
+train %>% 
+  ggplot(aes(x = sgpt)) + 
+    geom_histogram(binwidth = 200) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+```{r sgot-exploration}
+train %>% 
+  ggplot(aes(x = sgot)) + 
+    geom_histogram(binwidth = 200) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+All of the enzyme levels show the same pattern as the bilirubin, where a wider
+range is seen in the group with liver disease, but many values are the same.
+
+To see whether the outliers for one measure are also outliers for the other,
+the bilirubin level can be plotted against one of the enzymes.
+
+```{r sgot-vs-bilirubin-exploration}
+train %>% 
+  ggplot(aes(x = alkphos, y = tb, shape = outcome, color = outcome)) + 
+    geom_point() +
+    scale_y_log10() + 
+    scale_x_log10() +
+    geom_vline(xintercept = 700) +
+    geom_hline(yintercept = 7.5) +
+    theme_minimal() 
+```
+
+The blue lines (which are added manually using fixed values) seem to show
+that while practically all of the healthy patients are in the lower left quadrant, the
+patients with liver disease who are not most commonly have either a high `alkphos`
+with a normal `tb` (lower right) or a high `tb` with a normal `alkphose`
+(upper left).
+
+The quadrant for patients with both elevated `tb` and `alkphos` (top right) 
+contains comparatively quite few, but all of these are patients in the group
+receiving care.
+
+### Proteins
+
+The next columns relate to the levels of Albumin (a group of 
+water-soluble globular proteins) and the total amount of protein 
+detected in the sample.
+
+```{r alb-exploration}
+train %>% 
+  ggplot(aes(x = alb)) + 
+    geom_histogram(binwidth = 0.5) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+The albumin levels appear mostly similar.
+
+```{r tp-exploration}
+train %>% 
+  ggplot(aes(x = tp)) + 
+    geom_histogram(binwidth = 0.5) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+The total protein amount also seems to be similar between the two groups.
+
+The final column is ratio between albumin and globulin. 
+
+```{r ag-exploration}
+subset(train, !is.na(ag)) %>% 
+  ggplot(aes(x = ag)) + 
+    geom_histogram(binwidth = 0.1) + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+Here there are some clear outliers in the group of patients with liver 
+disease, so again, the spread of the values appears to play a key part.
+
+# Data Preparation
+
+## Correlated Predictors
+
+It is evident from the descriptions of the data that some predictors are
+most likely correlated; for example, total protein and each of the individual 
+proteins that were meaured.
+
+It is possible to quickly find the correlations as follows. Note that the 
+categorical columns are excluded.
+
+```{r desc-cor}
+cor(subset(train, select = -c(sex, outcome)))
+```
+
+Using 0.7 as a cutoff to identify highly correlated predictors, those that
+warrant further investigation are;
+
+* Direct bilirubin (`db`) and total bilirubin (`tb`)
+* Aspartate Aminotransferase (`sgot`) and Alamine Aminotransferase (`sgpt`)
+* Albumin (`alb`) and Total protein (`tp`)
+
+### Bilirubin
+
+Graphing the distribution of the points in both groups will make it clear 
+whether the correlation affects both patient groups equally.
+
+```{r bilirubin-comparison}
+train %>% 
+  ggplot(aes(x = tb, y = db)) + 
+    geom_point() + 
+    theme_minimal() +
+    facet_grid(~ outcome)
+```
+
+Both groups have the same correlation, with outliers in a similar range.
+
+For this reason, it may make sense to drop one of these from the 
+list of predictors. 
+
+```{r drop-db}
+train <- train %>% subset(select = -c(db))
+test <- test %>% subset(select = -c(db))
+```
+
+### Aminotransferases
+
+The same approach can be used for the `sgot` and `sgpt` columns.
+
+```{r sxpt-comparison}
+train %>% 
+  ggplot(aes(x = sgot, y = sgpt, color = outcome, shape = outcome)) + 
+    geom_point() + 
+    theme_minimal()
+```
+
+Again, with the same remaining fairly consistent, it makes sense 
+to eliminate one of the columns. As it displays more variance, it
+makes sense to keep `sgot`.
+
+```{r drop-sgpt}
+train <- train %>% subset(select = -c(sgpt))
+test <- test %>% subset(select = -c(sgpt))
+```
+
+### Proteins
+
+Finally, since total proteins (`tp`) includes Albumin (`alb`), these
+can be explored.
+
+```{r protein-comparison}
+train %>% 
+  ggplot(aes(x = tp, y = alb, color = outcome, shape = outcome)) + 
+    geom_point() + 
+    theme_minimal()
+```
+
+Again, these are highly correlated, with no visible significance to 
+any outliers, so the total proteins value can be retained.
+
+```{r drop-alb}
+train <- train %>% subset(select = -c(alb))
+test <- test %>% subset(select = -c(alb))
+```
+
+# Machine Learning Methods
+
+The data show some signs of correlations which might permit machine 
+learning models to be developed. The stated aim of this project is to
+identify patients who may benefit from assessment for liver care, the 
+natural metric to explore might be accuracy (the proportio of patients 
+grouped correctly).
+
+Other metrics to consider are the sensitivity (the proportion of 
+patients who were in the disease group correctly identified) and 
+specificity (the proportion of actual negatives, which are healthy
+patients, identified as such).
+
+The results can be saved after each model, to allow for easier comparison.
+
+```{r setup-storage}
+results <- data.frame(Model = character(), 
+                      Accuracy = double(), 
+                      Sensitivity = double(), 
+                      Specificity = double(), 
+                      stringsAsFactors = FALSE)
+```
+
+## Naive Bayes
+
+One of the most common classification models is the Naive Bayes model. This
+calculates a series of conditional probabilities, and the probabilities of
+each possible outcome.
+
+```{r nb-train, info=FALSE, warning=FALSE}
+nb_model = train(outcome ~ ., data = train, method = "nb")
+predictions = predict(nb_model, newdata = test)
+confusionMatrix <- confusionMatrix(predictions, test$outcome)
+results[nrow(results) + 1, ] <- c(as.character('Naive Bayes (nb)'), 
+                                  confusionMatrix$overall['Accuracy'],  
+                                  confusionMatrix$byClass['Sensitivity'], 
+                                  confusionMatrix$byClass['Specificity'])
+rm(nb_model, predictions)
+confusionMatrix
+```
+
+The accuracy of 0.6 seems low, but it's important to note that Naive Bayes
+assumes that the feeatures are independent, when they are clearly not.
+
+## Linear Classifier
+
+Another popular option is a linear classifier. In this case, the "Boosted 
+Generalized Linear Model".
+
+```{r linc-train, info=FALSE, warning=FALSE}
+lc_model = train(outcome ~ ., data = train, method = "glmboost")
+predictions = predict(lc_model, newdata = test)
+confusionMatrix <- confusionMatrix(predictions, test$outcome)
+results[nrow(results) + 1, ] <- c(as.character('Linear Classifier (glmboost)'), 
+                                  confusionMatrix$overall['Accuracy'],  
+                                  confusionMatrix$byClass['Sensitivity'], 
+                                  confusionMatrix$byClass['Specificity'])
+rm(lc_model, predictions)
+confusionMatrix
+```
+
+Here the accuracy is clearly improved, but the confusion matrix shows a 
+critical point - it predicted that nearly every patient needed care, 
+despite 33 of these being incorrect.
+
+Here, the sensitivity (the number of patients correctly identified) was 
+close to 1 (which would otherwise be excellent), but the sensitivity 
+(those without the disease categorised as such) was close to zero.
+
+While the precise priorities are for healthcare systems (hospitals, primary 
+care doctors, commissioners and insurers) to decide, it makes sense to avoid 
+referring patients who are otherwise healthy.
+
+The other problem is that in these data, the group with liver disease are
+larger than the control group. This gives the unusually large accuracy metric.
+
+Glovally, liver disease is thought to occur in 4-8% of the population at 
+some time in their lives. This means that with data representing a more
+typical population (rather than "liver patients"), the accuracy of this
+approach would be less than 0.1.
+
+For that reason, it is now useful to repeat the previous two confusion 
+matrices, this time calculating the values including the prevalence (which 
+we can estimate as 6%).
+
+```{r nb-train-prev, info=FALSE, warning=FALSE}
+nb_model = train(outcome ~ ., data = train, method = "nb")
+predictions = predict(nb_model, newdata = test)
+confusionMatrix <- confusionMatrix(predictions, test$outcome, prevalence = 0.06)
+rm(nb_model, predictions)
+confusionMatrix
+```
+
+```{r linc-train-prev, info=FALSE, warning=FALSE}
+lc_model = train(outcome ~ ., data = train, method = "glmboost")
+predictions = predict(lc_model, newdata = test)
+confusionMatrix <- confusionMatrix(predictions, test$outcome, prevalence = 0.06)
+rm(lc_model, predictions)
+confusionMatrix
+```
+
+If this is to be used as a medical screening tool, the key values here are 
+the Positive Predictive Value and Negative Predictive Value. 
+
+In the case of the linear classifier, only 6% of those who the test flags
+up actually have liver disease, which, while it didn't miss any at-risk
+patients, seems unacceptably low, and means that 94% of patients who 
+were referred for further investigation had no underlying liver disease.
+
+Comparatively in the Naive Bayes model, while only 10% of the patients 
+flagged needed further care, 96% of those who were identified as at less
+risk were not at risk.
+
+## Logistic Regression
+
+Another very common machine learning approach is logistic regression. This
+time, using the Bayesian Generalized Linear Model, and including the actual
+prevalence in the confusion matrix. 
+
+```{r lr-train, info=FALSE, warning=FALSE}
+lr_model = train(outcome ~ ., data = train, method = "bayesglm")
+predictions = predict(lr_model, newdata = test)
+confusionMatrix <- confusionMatrix(predictions, test$outcome, prevalence = 0.06)
+results[nrow(results) + 1, ] <- c(as.character('Logistic Regression (bayesglm)'), 
+                                  confusionMatrix$overall['Accuracy'],  
+                                  confusionMatrix$byClass['Sensitivity'], 
+                                  confusionMatrix$byClass['Specificity'])
+rm(lr_model, predictions)
+confusionMatrix
+```
+
+This shows a further improvement. The PPV of 0.07 is lower, but the 
+NPV of 0.98 represents a far larger group of patients.
+
+## K-Nearest Neighbours
+
+The next method to consider is the "Nearest Neighbours", here the 
+K-nearest neighbours. This will find the k closest matching points from
+the training data. These will have their results averaged to find the
+predicted outcome.
+
+This is a powerful idea, as the nearest neighbours to any patient will
+be patients with similar profiles (demographics and blood results), so
+may be more likely to have the same outcome.
+
+The value of K is a tuning parameter, and the following code will 
+attempt to find the most appropriate value.
+
+```{r knn-train, info=FALSE, warning=FALSE}
+knn_model = train(outcome ~ ., data = train, method = "knn", preProcess=c('knnImpute'))
+knn_model
+```
+
+The value of 9 is settled on here. It's worth noting that in 
+a more widespread deployment, where more pleniful training data 
+are available, this could be different.
+
+```{r knn-predict}
+predictions = predict(knn_model, newdata = test)
+confusionMatrix <- confusionMatrix(predictions, test$outcome, prevalence = 0.06)
+results[nrow(results) + 1, ] <- c(as.character('K-nearest neighbours (knn)'), 
+                                  confusionMatrix$overall['Accuracy'],  
+                                  confusionMatrix$byClass['Sensitivity'], 
+                                  confusionMatrix$byClass['Specificity'])
+rm(knn_model, predictions)
+confusionMatrix
+```
+
+Despite a more realistic range of predictions, there is no 
+improvement to the accuracies, sensitivity or specificity.
+
+## Random Forest
+
+The final tested approach is a random forest. This will create a 
+"forest" of randomly chosen decision trees, which result in a 
+classification.
+
+The results of these trees will then be compared, and the best 
+performing tree selected.
+
+```{r rf-train, info=FALSE, warning=FALSE}
+rf_model = train(outcome ~ ., data = train, method = "rf")
+predictions = predict(rf_model, newdata = test)
+confusionMatrix <- confusionMatrix(predictions, test$outcome, prevalence = 0.06)
+results[nrow(results) + 1, ] <- c(as.character('Random Forest (rf)'), 
+                                  confusionMatrix$overall['Accuracy'],  
+                                  confusionMatrix$byClass['Sensitivity'], 
+                                  confusionMatrix$byClass['Specificity'])
+rm(rf_model, predictions)
+confusionMatrix
+```
+
+```{r cleanup-cm}
+rm(confusionMatrix)
+```
+
+# Results
+
+The results of the comparison can be seen in the following table.
+
+```{r print-results}
+results %>% arrange(Accuracy)
+```
+
+At this point, it is worth considering the pros and cons of each combination
+of results.
+
+Models that are highly sensitive, but less specific (the linear 
+classifier, logistic regression and k-nearest neighbours) would mean patients
+are very likely to be flagged if they would benefit from specialist care, 
+however many patients who would not benefit will also be flagged.
+
+Models with high speficicity but low sensitivity (none of these models 
+behaved this way) would be good for identifying patients who are very likely
+to need care. A 'hit' on a tool like this would indicate that the patient is
+almost certainly in the group requiring further care, but it is also likely 
+to miss a large number of patients who would benefit from care.
+
+Models (like Naive Bayes), which perform well in both sensitivity and 
+specificty provide a compromise. Not all patients who would benefit from care
+will be spotted, but there will be fewer patients missed who may otherwise
+receive care.
+
+# Conclusion
+
+After careful cnsideration, no model has a perfect combination that makes it
+clearly superior to the others.
+
+Studying the documentation indicates that KNN would most likely improve in 
+performance a little with a larger training data set.
+
+Since the idea of this project was to aid analysis of blood results, but not 
+replace the role of the physician in that process, a combination of high
+sensitivity and low specificity might be useful. It will lead to many 
+patients being highlighted unnecessarily, but will allow a doctor to quickly
+note that the blood results (and wider patient presentation) need attention 
+with regard to their liver. 
+
+Despite this, there is a risk that, especially in public-sector healthcare 
+systems, this could be a huge increase in workload for clinicians, who would
+need to review significant numbers of patients who have no illness, no symptoms
+and no significant benefit from specialist care.
+
+There is a risk of 'alert fatigue', where doctors get so used to seeing a
+warning marker that a patient may need specialist care that they begin 
+ignoring the warnings altogether.
+
+For this reason, the Naive Bayes approach, using the `nb` method of the `caret`
+package, appears to offer the best combination of accuracy, sensitivity and 
+specificity.
+
+This approach has been selected for creating the attached script. 
+
+# References
+
+1. Dua, D. and Graff, C. (2019). UCI Machine Learning Repository [http://archive.ics.uci.edu/ml]. Irvine, CA: University of California, School of Information and Computer Science.
